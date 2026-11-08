@@ -52,7 +52,13 @@ def filter_movies(genre: str = None, year: int = None) -> list[dict]:
     candidates = candidates[candidates['count'] >= 3]
     
     if year is not None:
-        candidates = candidates[candidates['year'] == year]
+        try:
+            # Defensively force input year to be an integer, rejecting non-integer formats
+            clean_year = int(year)
+            candidates = candidates[candidates['year'] == clean_year]
+        except ValueError:
+            # reject non-integer year inputs and return an error message
+            return [{"error": f"Invalid year format: {year}. Must be an integer."}]
         
     if genre is not None:
         candidates = candidates[candidates['genres'].apply(lambda x: genre in x)]
@@ -61,25 +67,26 @@ def filter_movies(genre: str = None, year: int = None) -> list[dict]:
 
 
 # rank_candidated function to rank candidate movies based on their average rating
-def rank_candidates(candidates: list[dict], top_n: int = 5) -> list[dict]:
+def rank_candidates(movie_ids: list[int], top_n: int = 5) -> list[dict]:
     """Rank a list of candidate movies by their average rating and return the top results.
     
     Args:
-        candidates: A list of movie dictionaries (typically from filter_movies or search_movies).
+        movie_ids: A list of integer movie IDs (e.g., [2448, 2571, 2600]) found by previous tools.
         top_n: The maximum number of movies to return (default is 5).
         
     Returns:
         A sorted list of the top N movie dictionaries.
     """
-    # Safety check: if the input list is empty, return an empty list
-    if not candidates:
+    if not movie_ids:
         return []
     
-    # Sort the list of dictionaries by the 'mean' key in descending order
-    ranked = sorted(candidates, key=lambda x: x.get('mean', 0.0), reverse=True)
+    # Python does the heavy lifting: look up the exact IDs in the dataframe
+    candidates = _catalog_df[_catalog_df['movieId'].isin(movie_ids)]
     
-    # Return only the requested number of top results
-    return ranked[:top_n]
+    # Sort them deterministically by rating
+    ranked = candidates.sort_values(by='mean', ascending=False).head(top_n)
+    
+    return ranked.to_dict('records')
 
 
 # get_movie_details function to retrieve detailed information about a specific movie
