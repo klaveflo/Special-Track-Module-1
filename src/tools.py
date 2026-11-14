@@ -5,6 +5,7 @@
 import ast
 import os
 import pandas as pd
+from src.memory import get_user_preferences
 
 
 # Robust path resolution to the data folder
@@ -68,25 +69,91 @@ def filter_movies(genre: str = None, year: int = None) -> list[dict]:
 
 # rank_candidated function to rank candidate movies based on their average rating
 def rank_candidates(movie_ids: list[int], top_n: int = 5) -> list[dict]:
-    """Rank a list of candidate movies by their average rating and return the top results.
-    
+    """Rank candidate movies by combining catalog rating with stored user preferences.
+    Always call this tool after searching or filtering to personalize the order of results.
+
+    Scoring Rule:
+        1. Exclude any movieId already present in user 'dislikes' or 'likes' (to recommend unseen titles).
+        2. Start with the movie's catalog 'mean' rating.
+        3. Add +0.30 for each genre matching a genre from the user's liked movies.
+        4. Subtract -0.40 for each genre matching a genre from the user's disliked movies.
+
     Args:
-        movie_ids: A list of integer movie IDs (e.g., [2448, 2571, 2600]) found by previous tools.
-        top_n: The maximum number of movies to return (default is 5).
-        
+        movie_ids: A list of integer movie IDs (e.g., [2571, 2600, 3175]) from search/filter results.
+        top_n: Maximum number of ranked movies to return (default is 5).
+
     Returns:
-        A sorted list of the top N movie dictionaries.
+        A sorted list of up to top_n movie dictionaries with 'personalized_score' and 'preference_note'.
     """
     if not movie_ids:
         return []
-    
-    # Python does the heavy lifting: look up the exact IDs in the dataframe
-    candidates = _catalog_df[_catalog_df['movieId'].isin(movie_ids)]
-    
-    # Sort them deterministically by rating
-    ranked = candidates.sort_values(by='mean', ascending=False).head(top_n)
-    
-    return ranked.to_dict('records')
+
+    # Defensively normalize IDs (handles strings or dicts if the LLM formats arguments loosely)
+    clean_ids = []
+    for item in movie_ids:
+        if isinstance(item, dict) and "movieId" in item:
+            clean_ids.append(int(item["movieId"]))
+        else:
+            try:
+                clean_ids.append(int(item))
+            except (ValueError, TypeError):
+                continue
+
+    if not clean_ids:
+        return []
+
+    candidates = _catalog_df[_catalog_df["movieId"].isin(clean_ids)].copy()
+    if candidates.empty:
+        return []
+
+    # Load persistent user preferences
+    prefs = get_user_preferences()
+    liked_ids = {m["movieId"] for m in prefs.get("likes", [])}
+    disliked_ids = {m["movieId"] for m in prefs.get("dislikes", [])}
+
+    liked_genres = {g for m in prefs.get("likes", []) for g in m.get("genres", [])}
+    disliked_genres = {g for m in prefs.get("dislikes", []) for g in m.get("genres", [])}
+
+    # Rule 1: Exclude already-rated movies (both disliked and previously liked)
+    excluded_ids = liked_ids | disliked_ids
+    candidates = candidates[~candidates["movieId"].isin(excluded_ids)]
+    if candidates.empty:
+        return []
+
+    # Rules 2-4: Compute personalized score per candidate
+    scored_records = []
+    for record in candidates.to_dict("records"):
+        base_score = float(record.get("mean", 0.0))
+        movie_genres = set(record.get("genres", []))
+
+        matched_likes = sorted(movie_genres & liked_genres)
+        matched_dislikes = sorted(movie_genres & disliked_genres)
+
+        bonus = 0.30 * len(matched_likes)
+        penalty = 0.40 * len(matched_dislikes)
+        adjustment = round(bonus - penalty, 3)
+        final_score = round(max(0.0, base_score + adjustment), 3)
+
+        # Build a transparent explanation string the LLM can cite directly
+        notes = []
+        if matched_likes:
+            notes.append(f"+{bonus:.2f} for liked genres ({', '.join(matched_likes)})")
+        if matched_dislikes:
+            notes.append(f"-{penalty:.2f} for disliked genres ({', '.join(matched_dislikes)})")
+
+        record["personalized_score"] = final_score
+        record["preference_adjustment"] = adjustment
+        record["preference_note"] = (
+            "; ".join(notes) if notes else "No stored genre adjustments applied"
+        )
+        scored_records.append(record)
+
+    # Sort descending by personalized_score, using raw mean rating as tie-breaker
+    scored_records.sort(
+        key=lambda x: (x["personalized_score"], x.get("mean", 0.0)),
+        reverse=True,
+    )
+    return scored_records[:top_n]
 
 
 # get_movie_details function to retrieve detailed information about a specific movie
