@@ -18,6 +18,9 @@ CATALOG_PATH = DATA_DIR / "cleaned_movie_data.csv"
 # as the global mean. Tune it and document the value in your write-up.
 PRIOR_STRENGTH = 10
 
+# Catalog entries with fewer ratings are never recommended or retrieved.
+MIN_RATINGS = 3
+
 
 def _load_catalog() -> pd.DataFrame:
     df = pd.read_csv(CATALOG_PATH)

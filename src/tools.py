@@ -11,11 +11,12 @@ from src.catalog import (
     normalize_genre,
     to_int,
     to_records,
+    MIN_RATINGS
 )
 from src.memory import get_user_preferences
+from src.retrieval import search_descriptions  
 
 MAX_RESULTS = 10          # hard cap on rows returned to the model (keeps context small)
-MIN_RATINGS = 3           # catalog entries with fewer ratings are never recommended
 LIKE_BONUS = 0.30         # score added per genre shared with a liked movie
 DISLIKE_PENALTY = 0.40    # score subtracted per genre shared with a disliked movie
 MAX_ADJUSTMENT = 1.0      # preference adjustment is clipped to +/- this value
